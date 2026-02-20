@@ -7,6 +7,9 @@ export type MessageType =
     | 'audio'
     | 'sticker'
     | 'gif'
+    | 'document'
+    | 'contact'
+    | 'location'
     | 'system'      // "Messages are encrypted", "You created group"
     | 'call_log'    // "Missed voice call"
     | 'deleted';    // "This message was deleted"
