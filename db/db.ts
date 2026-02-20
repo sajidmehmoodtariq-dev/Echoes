@@ -101,7 +101,7 @@ export async function getMessages(chatId: number, limit: number = 50, offset: nu
         FROM messages m
         LEFT JOIN senders s ON m.sender_id = s.id
         WHERE m.chat_id = ?
-        ORDER BY m.timestamp ASC
+        ORDER BY m.timestamp ASC, m.id ASC
         LIMIT ? OFFSET ?
     `, [chatId, limit, offset]);
 }
@@ -260,8 +260,83 @@ export async function searchMessages(query: string, limit: number = 50): Promise
             JOIN chats c ON m.chat_id = c.id
             LEFT JOIN senders s ON m.sender_id = s.id
             WHERE m.content LIKE ?
-            ORDER BY m.timestamp DESC
+            ORDER BY m.timestamp DESC, m.id DESC
             LIMIT ?
         `, [`%${query}%`, limit]);
     }
+}
+
+// ==========================================
+// MODULE 4: ANALYTICS DASHBOARD QUERIES
+// ==========================================
+
+export interface ChatStats {
+    totalMessages: number;
+    firstMessageDate: number;
+    lastMessageDate: number;
+    activeDays: number;
+}
+
+export async function getChatStats(chatId: number): Promise<ChatStats> {
+    const result = await db.getFirstAsync<{
+        total: number,
+        first: number,
+        last: number,
+        days: number
+    }>(`
+        SELECT 
+            COUNT(*) as total,
+            MIN(timestamp) as first,
+            MAX(timestamp) as last,
+            COUNT(DISTINCT date(timestamp / 1000, 'unixepoch', 'localtime')) as days
+        FROM messages
+        WHERE chat_id = ? AND type != 'system'
+    `, [chatId]);
+
+    return {
+        totalMessages: result?.total || 0,
+        firstMessageDate: result?.first || 0,
+        lastMessageDate: result?.last || 0,
+        activeDays: result?.days || 0
+    };
+}
+
+export async function getTopSenders(chatId: number, limit: number = 5): Promise<{ senderName: string, count: number }[]> {
+    return await db.getAllAsync<{ senderName: string, count: number }>(`
+        SELECT s.name as senderName, COUNT(m.id) as count
+        FROM messages m
+        JOIN senders s ON m.sender_id = s.id
+        WHERE m.chat_id = ? AND m.type != 'system'
+        GROUP BY m.sender_id
+        ORDER BY count DESC
+        LIMIT ?
+    `, [chatId, limit]);
+}
+
+export async function getUsageByDayOfWeek(chatId: number): Promise<{ day: string, count: number }[]> {
+    // SQLite %w returns 0-6 where 0 is Sunday
+    const results = await db.getAllAsync<{ dayNum: string, count: number }>(`
+        SELECT strftime('%w', timestamp / 1000, 'unixepoch', 'localtime') as dayNum, COUNT(*) as count
+        FROM messages
+        WHERE chat_id = ? AND type != 'system'
+        GROUP BY dayNum
+        ORDER BY dayNum ASC
+    `, [chatId]);
+
+    const daysMap = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    return results.map(r => ({
+        day: daysMap[Number(r.dayNum)],
+        count: r.count
+    }));
+}
+
+export async function getUsageByHourOfDay(chatId: number): Promise<{ hour: string, count: number }[]> {
+    // SQLite %H returns 00-23
+    return await db.getAllAsync<{ hour: string, count: number }>(`
+        SELECT strftime('%H', timestamp / 1000, 'unixepoch', 'localtime') as hour, COUNT(*) as count
+        FROM messages
+        WHERE chat_id = ? AND type != 'system'
+        GROUP BY hour
+        ORDER BY hour ASC
+    `, [chatId]);
 }

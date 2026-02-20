@@ -126,8 +126,8 @@ export default function ChatScreen() {
             </View>
 
             <View style={styles.headerIcons}>
-                <TouchableOpacity style={styles.iconButton}>
-                    <Ionicons name="videocam" size={22} color="#fff" />
+                <TouchableOpacity style={styles.iconButton} onPress={() => router.push(`/analytics/${id}` as any)}>
+                    <Ionicons name="stats-chart" size={22} color="#fff" />
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.iconButton}>
                     <Ionicons name="call" size={20} color="#fff" />

@@ -107,20 +107,29 @@ export default function Index() {
                         return;
                     }
 
-                    // 3. SQLite DML
                     const insertedId = await insertParsedChat(parsedData);
                     const timestampB = Date.now();
 
                     // Cleanup Memory immediately referencing JS engine
                     fileContent.length; // Force evaluation
 
-                    // Allow UI to update
-                    await refreshChats();
-                    setIsParsing(false);
-
+                    // We DO NOT call refreshChats or setIsParsing here yet for giant files. 
+                    // Let the UI breathe, fire the alert, and do cleanup after the user taps OK.
                     Alert.alert(
                         "Import Successful",
-                        `Saved ${parsedData.messages.length} messages in ${timestampB - timestampA}ms.\nPlatform: ${parsedData.chat.sourcePlatform}`
+                        `Saved ${parsedData.messages.length} messages in ${timestampB - timestampA}ms.\nPlatform: ${parsedData.chat.sourcePlatform}`,
+                        [
+                            {
+                                text: "OK",
+                                onPress: () => {
+                                    // Use setTimeout to yield to the JS event loop so the Alert can close smoothly
+                                    setTimeout(async () => {
+                                        await refreshChats();
+                                        setIsParsing(false);
+                                    }, 100);
+                                }
+                            }
+                        ]
                     );
 
                 } catch (parseOrDbError: any) {

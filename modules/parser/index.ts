@@ -31,6 +31,23 @@ export function parseWhatsAppChat(rawText: string, fileName: string = 'Imported 
     // Split raw text into lines. Handles both Windows (\r\n) and Unix (\n) line endings.
     const lines = rawText.split(/\r?\n/);
 
+    // 0. Pre-scan to detect platform format before we drop any lines
+    for (let i = 0; i < Math.min(lines.length, 100); i++) {
+        const line = sanitizeContent(lines[i]);
+        if (ANDROID_REGEX.timestampPrefix.test(line)) {
+            platform = 'android';
+            break;
+        } else if (IOS_REGEX.timestampPrefix.test(line)) {
+            platform = 'ios';
+            break;
+        }
+    }
+
+    if (platform === 'unknown') {
+        warnings.push(`File format not recognized by line 100. Assuming android export.`);
+        platform = 'android';
+    }
+
     for (const rawLine of lines) {
         currentLineNumber++;
 
@@ -42,21 +59,6 @@ export function parseWhatsAppChat(rawText: string, fileName: string = 'Imported 
 
         const unSanitizedLine = rawLine; // Keep original for debug
         const line = sanitizeContent(rawLine);
-
-        // 1. Detect platform format on the first valid line
-        if (platform === 'unknown') {
-            if (ANDROID_REGEX.timestampPrefix.test(line)) platform = 'android';
-            else if (IOS_REGEX.timestampPrefix.test(line)) platform = 'ios';
-
-            // If we still don't know the platform and we've read 50 lines, it might be a bad file
-            if (platform === 'unknown' && currentLineNumber > 50) {
-                warnings.push(`File format not recognized by line 50. Ensure this is a valid WhatsApp export.`);
-                break; // Stop parsing to avoid infinite junk loops
-            }
-
-            // If still unknown on early lines, skip (might be header lines)
-            if (platform === 'unknown') continue;
-        }
 
         // 2. Extract Timestamp and Body based on detected platform
         let match = null;
@@ -130,12 +132,23 @@ export function parseWhatsAppChat(rawText: string, fileName: string = 'Imported 
                 if (lastMessage.rawText) {
                     lastMessage.rawText += '\n' + unSanitizedLine;
                 }
-
-                // Continually running `detectMessageType` on multi-line text is unnecessary,
-                // unless it's a multiline system message, which is extremely rare.
             } else {
+                // FALLBACK: If we don't have a last message yet, but have content (like a weird initial system message)
                 if (line.trim() !== '') {
-                    warnings.push(`Line ${currentLineNumber} skipped: Orphaned line before first message.`);
+                    // Treat it as a system message attached to the start of time
+                    const fallbackMessage: Message = {
+                        id: currentLineNumber,
+                        chatId: 0,
+                        timestamp: 0, // Fallback to 0 (Jan 1, 1970) so it appears at the extreme TOP of the chat
+                        content: line,
+                        type: 'system',
+                        isMediaOmitted: false,
+                        senderId: 0,
+                        rawText: unSanitizedLine
+                    };
+                    (fallbackMessage as any)._rawSender = 'System';
+                    messages.push(fallbackMessage);
+                    lastMessage = fallbackMessage;
                 }
             }
         }
