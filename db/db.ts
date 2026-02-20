@@ -107,6 +107,53 @@ export async function getMessages(chatId: number, limit: number = 50, offset: nu
 }
 
 /**
+ * Fetches a window of messages around a specific message ID for deep linking.
+ * Grabs previous and next messages to form a context payload.
+ */
+export async function getMessageNeighborhood(chatId: number, targetMessageId: number, limit: number = 50): Promise<(Message & { senderName?: string })[]> {
+    const halfLimit = Math.floor(limit / 2);
+
+    // Fetch older messages and the target message
+    const olderAndTarget = await db.getAllAsync<Message & { senderName?: string }>(`
+        SELECT 
+            m.id, m.chat_id as chatId, m.sender_id as senderId, 
+            m.timestamp, m.content, m.type, 
+            m.is_media_omitted as isMediaOmitted, 
+            m.media_uri as mediaUri, m.reply_to_id as replyToId,
+            m.sentiment_score as sentimentScore, m.is_meaningful as isMeaningful,
+            s.name as senderName
+        FROM messages m
+        LEFT JOIN senders s ON m.sender_id = s.id
+        WHERE m.chat_id = ? AND m.id <= ?
+        ORDER BY m.id DESC
+        LIMIT ?
+    `, [chatId, targetMessageId, halfLimit]);
+
+    // Fetch newer messages
+    const newer = await db.getAllAsync<Message & { senderName?: string }>(`
+        SELECT 
+            m.id, m.chat_id as chatId, m.sender_id as senderId, 
+            m.timestamp, m.content, m.type, 
+            m.is_media_omitted as isMediaOmitted, 
+            m.media_uri as mediaUri, m.reply_to_id as replyToId,
+            m.sentiment_score as sentimentScore, m.is_meaningful as isMeaningful,
+            s.name as senderName
+        FROM messages m
+        LEFT JOIN senders s ON m.sender_id = s.id
+        WHERE m.chat_id = ? AND m.id > ?
+        ORDER BY m.id ASC
+        LIMIT ?
+    `, [chatId, targetMessageId, halfLimit]);
+
+    // olderAndTarget is DESC, reverse to ASC
+    const combined = [...olderAndTarget.reverse(), ...newer];
+
+    // Sort by ID to ensure strict chronological order
+    combined.sort((a, b) => a.id - b.id);
+    return combined;
+}
+
+/**
  * Core insertion function. Wrapped in a transaction for extreme performance.
  * Expo SQLite transactions process prepared statements synchronously in native code.
  */
@@ -168,4 +215,53 @@ export async function insertParsedChat(parsedData: ParseResult): Promise<number>
  */
 export async function deleteChatById(chatId: number): Promise<void> {
     await db.runAsync(`DELETE FROM chats WHERE id = ?`, [chatId]);
+}
+
+/**
+ * Performs a fast Full-Text Search across all messages in the database.
+ * Returns the messages along with their parent chat names.
+ */
+export async function searchMessages(query: string, limit: number = 50): Promise<(Message & { senderName?: string, chatName: string })[]> {
+    if (!query.trim()) return [];
+
+    // Convert to FTS5 query syntax (prefix matching)
+    // E.g., "apple juice" -> "apple* juice*"
+    const ftsQuery = query.trim().split(/\s+/).map(term => `"${term}"*`).join(' AND ');
+
+    try {
+        return await db.getAllAsync<Message & { senderName?: string, chatName: string }>(`
+            SELECT 
+                m.id, m.chat_id as chatId, c.name as chatName, m.sender_id as senderId, 
+                m.timestamp, m.content, m.type, 
+                m.is_media_omitted as isMediaOmitted, 
+                m.media_uri as mediaUri, m.reply_to_id as replyToId,
+                m.sentiment_score as sentimentScore, m.is_meaningful as isMeaningful,
+                s.name as senderName
+            FROM messages_fts fts
+            JOIN messages m ON fts.rowid = m.id
+            JOIN chats c ON m.chat_id = c.id
+            LEFT JOIN senders s ON m.sender_id = s.id
+            WHERE messages_fts MATCH ?
+            ORDER BY rank
+            LIMIT ?
+        `, [ftsQuery, limit]);
+    } catch (err) {
+        console.warn("FTS5 Search failed (possible bad regex). Falling back to LIKE...", err);
+        // Fallback to LIKE if FTS syntax breaks
+        return await db.getAllAsync<Message & { senderName?: string, chatName: string }>(`
+            SELECT 
+                m.id, m.chat_id as chatId, c.name as chatName, m.sender_id as senderId, 
+                m.timestamp, m.content, m.type, 
+                m.is_media_omitted as isMediaOmitted, 
+                m.media_uri as mediaUri, m.reply_to_id as replyToId,
+                m.sentiment_score as sentimentScore, m.is_meaningful as isMeaningful,
+                s.name as senderName
+            FROM messages m
+            JOIN chats c ON m.chat_id = c.id
+            LEFT JOIN senders s ON m.sender_id = s.id
+            WHERE m.content LIKE ?
+            ORDER BY m.timestamp DESC
+            LIMIT ?
+        `, [`%${query}%`, limit]);
+    }
 }

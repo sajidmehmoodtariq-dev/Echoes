@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useChatContext } from '../../context/ChatContext';
-import { getMessages, Message } from '../../db/db';
+import { getMessageNeighborhood, getMessages, Message } from '../../db/db';
 
 const WA_COLORS = {
     primary: '#008069',
@@ -30,14 +30,15 @@ const WA_COLORS = {
 type UIType = Message & { senderName?: string };
 
 export default function ChatScreen() {
-    const { id } = useLocalSearchParams();
+    const { id, msgId } = useLocalSearchParams();
     const router = useRouter();
-    const { chats } = useChatContext();
+    const { chats, myName } = useChatContext();
 
     const [messages, setMessages] = useState<UIType[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [page, setPage] = useState(0);
     const [hasMore, setHasMore] = useState(true);
+    const [highlightedMsgId, setHighlightedMsgId] = useState<number | null>(msgId ? Number(msgId) : null);
 
     const PAGE_SIZE = 50;
     const flatListRef = useRef<FlatList>(null);
@@ -52,20 +53,45 @@ export default function ChatScreen() {
         setIsAtBottom(bottomThreshold < 150);
     };
 
-    const fetchMessages = async (pageNum: number) => {
-        if (!id || !hasMore && pageNum > 0) return;
+    const fetchMessages = async (pageNum: number, targetMsgId?: number) => {
+        if (!id || (!hasMore && pageNum > 0 && !targetMsgId)) return;
 
         try {
             if (pageNum === 0) setIsLoading(true);
 
-            const newMessages = await getMessages(Number(id), PAGE_SIZE, pageNum * PAGE_SIZE);
+            let newMessages: UIType[] = [];
 
-            if (newMessages.length < PAGE_SIZE) {
+            if (targetMsgId) {
+                // Deep link from search: fetch the neighborhood around this message
+                newMessages = await getMessageNeighborhood(Number(id), targetMsgId, PAGE_SIZE);
+                // When deep linking into the middle of a chat, standard pagination gets complicated.
+                // We'll disable infinite scroll upwards for this simple implementation when jumping, 
+                // or just let it be a static "snapshot" view.
+                setHasMore(false);
+            } else {
+                newMessages = await getMessages(Number(id), PAGE_SIZE, pageNum * PAGE_SIZE);
+            }
+
+            if (newMessages.length < PAGE_SIZE && !targetMsgId) {
                 setHasMore(false);
             }
 
             setMessages(prev => pageNum === 0 ? newMessages : [...prev, ...newMessages]);
             setPage(pageNum);
+
+            // Auto-scroll logic if we jumped to a specific message
+            if (targetMsgId && pageNum === 0) {
+                // Give the FlatList a moment to render the new items, then scroll
+                setTimeout(() => {
+                    if (flatListRef.current) {
+                        const targetIndex = newMessages.findIndex(m => m.id === targetMsgId);
+                        if (targetIndex !== -1) {
+                            flatListRef.current.scrollToIndex({ index: targetIndex, animated: true, viewPosition: 0.5 });
+                        }
+                    }
+                }, 300);
+            }
+
         } catch (err) {
             console.error("Error fetching messages:", err);
         } finally {
@@ -74,8 +100,12 @@ export default function ChatScreen() {
     };
 
     useEffect(() => {
-        fetchMessages(0);
-    }, [id]);
+        if (msgId) {
+            fetchMessages(0, Number(msgId));
+        } else {
+            fetchMessages(0);
+        }
+    }, [id, msgId]);
 
     const renderHeader = () => (
         <View style={styles.header}>
@@ -114,12 +144,31 @@ export default function ChatScreen() {
         return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     };
 
+    // Deterministic color generator for group chat members
+    const getStringColor = (str: string) => {
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) {
+            hash = str.charCodeAt(i) + ((hash << 5) - hash);
+        }
+        // Use a good palette of readable colors
+        const colors = [
+            '#e53935', '#d81b60', '#8e24aa', '#5e35b1', '#3949ab',
+            '#1e88e5', '#039be5', '#00acc1', '#00897b', '#43a047',
+            '#f4511e', '#6d4c41', '#546e7a'
+        ];
+        return colors[Math.abs(hash) % colors.length];
+    };
+
     const [meSender, setMeSender] = useState<string | null>(null);
     const [isGroupChat, setIsGroupChat] = useState<boolean>(true);
 
     useEffect(() => {
-        // Attempt to identify the "Me" sender for bubble alignment
-        if (messages.length > 0 && (!meSender || isGroupChat) && currentChat) {
+        // If the user explicitly set their name in Settings, use it.
+        if (myName) {
+            setMeSender(myName);
+        }
+        // Otherwise attempt to heuristically identify the "Me" sender for bubble alignment
+        else if (messages.length > 0 && (!meSender || isGroupChat) && currentChat) {
             const uniqueSenders = Array.from(
                 new Set(messages.map(m => m.senderName).filter(name => name && name !== 'System'))
             );
@@ -127,19 +176,15 @@ export default function ChatScreen() {
             if (uniqueSenders.length > 0) {
                 setIsGroupChat(uniqueSenders.length > 2);
 
-                // If the chat name matches one of the senders exactly, the OTHER sender is 'me'.
-                // (e.g., chat is "Alice", so "Bob" is me).
                 if (uniqueSenders.includes(currentChat.name)) {
                     const other = uniqueSenders.find(s => s !== currentChat.name);
                     if (other) setMeSender(other as string);
-                }
-                // If it's a 1-on-1 but the name was slightly different, pick the second person to speak
-                else if (uniqueSenders.length === 2) {
+                } else if (uniqueSenders.length === 2) {
                     setMeSender(uniqueSenders[1] as string);
                 }
             }
         }
-    }, [messages, currentChat, meSender]);
+    }, [messages, currentChat, meSender, myName]);
 
     const renderMessage = ({ item, index }: { item: UIType, index: number }) => {
         const isSystem = item.type === 'system';
@@ -160,12 +205,20 @@ export default function ChatScreen() {
             );
         }
 
+        const isHighlighted = item.id === highlightedMsgId;
+
         return (
-            <View style={[styles.messageRow, isSentByMe ? styles.messageRowSent : styles.messageRowReceived]}>
+            <View style={[
+                styles.messageRow,
+                isSentByMe ? styles.messageRowSent : styles.messageRowReceived,
+                isHighlighted && styles.highlightedRow
+            ]}>
                 <View style={[styles.bubble, isSentByMe ? styles.bubbleSent : styles.bubbleReceived]}>
 
-                    {item.senderName && (
-                        <Text style={styles.senderName}>{item.senderName}</Text>
+                    {!isSentByMe && item.senderName && (
+                        <Text style={[styles.senderName, { color: getStringColor(item.senderName) }]}>
+                            {item.senderName}
+                        </Text>
                     )}
 
                     {isDeleted ? (
@@ -334,6 +387,11 @@ const styles = StyleSheet.create({
     messageRowReceived: {
         justifyContent: 'flex-start',
     },
+    highlightedRow: {
+        backgroundColor: 'rgba(255, 235, 59, 0.4)',
+        borderRadius: 8,
+        marginHorizontal: 4,
+    },
     bubble: {
         maxWidth: '80%',
         padding: 8,
@@ -354,7 +412,6 @@ const styles = StyleSheet.create({
         borderTopLeftRadius: 0,
     },
     senderName: {
-        color: '#e53935', // WhatsApp uses random colors per user, red is placeholder
         fontSize: 13,
         fontWeight: 'bold',
         marginBottom: 2,

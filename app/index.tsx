@@ -143,10 +143,10 @@ export default function Index() {
                     <TouchableOpacity style={styles.iconButton}>
                         <Ionicons name="camera-outline" size={24} color={WA_COLORS.textHeader} />
                     </TouchableOpacity>
-                    <TouchableOpacity style={styles.iconButton}>
+                    <TouchableOpacity style={styles.iconButton} onPress={() => router.push('/search' as any)}>
                         <Ionicons name="search" size={24} color={WA_COLORS.textHeader} />
                     </TouchableOpacity>
-                    <TouchableOpacity style={styles.iconButton}>
+                    <TouchableOpacity style={styles.iconButton} onPress={() => router.push('/settings' as any)}>
                         <Ionicons name="ellipsis-vertical" size={24} color={WA_COLORS.textHeader} />
                     </TouchableOpacity>
                 </View>
