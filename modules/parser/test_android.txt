@@ -1,0 +1,9 @@
+20/06/2021, 14:30 - Messages to this group are now secured with end-to-end encryption. Tap for more info.
+20/06/2021, 14:31 - Alice: Hey everyone!
+20/06/2021, 14:31 - Bob: Hi Alice! Long time no see.
+20/06/2021, 14:32 - Alice: I know right?
+This is a multi-line message
+that spans three lines!
+20/06/2021, 14:33 - Carol: <Media omitted>
+20/06/2021, 14:35 - Bob: Did you see the photo?
+LB

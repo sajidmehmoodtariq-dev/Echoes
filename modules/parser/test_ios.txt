@@ -1,0 +1,7 @@
+[20/06/21, 14:30:00] Alice: Hey team!
+[20/06/21, 14:30:15] Bob: Hello there.
+[20/06/21, 14:31:00] Alice: Check this out.
+It's a multi-line
+message from iOS.
+[20/06/21, 14:32:00] Carol: <Media omitted>
+[20/06/21, 14:33:00] System Message: You joined the group.
