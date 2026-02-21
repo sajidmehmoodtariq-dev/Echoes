@@ -1,0 +1,8 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- Transparent background for splash screen -->
+  <g transform="translate(512, 512)">
+    <circle cx="0" cy="0" r="320" fill="none" stroke="#1DA1F2" stroke-opacity="0.2" stroke-width="50" />
+    <circle cx="0" cy="0" r="210" fill="none" stroke="#1DA1F2" stroke-opacity="0.5" stroke-width="50" />
+    <circle cx="0" cy="0" r="100" fill="#1DA1F2" />
+  </g>
+</svg>
