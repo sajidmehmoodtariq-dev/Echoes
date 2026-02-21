@@ -1,7 +1,5 @@
-name: Manual APK Build
+name: Manual Expo APK Build
 
-# This is the magic trigger that makes it manual ONLY. 
-# It will NOT run automatically on push.
 on: 
   workflow_dispatch:
 
@@ -13,21 +11,39 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 1. We need Node.js to run Expo commands
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18' # You can change this to match your local Node version
+
+      # 2. Install your project packages
+      - name: Install dependencies
+        run: npm install
+
+      # 3. Set up Java for the Android build
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
-          java-version: '17' # Update this if your project uses a different Java version
+          java-version: '17'
           distribution: 'temurin'
 
+      # 4. The Magic Step: This generates the 'android' folder and gradlew!
+      - name: Generate Native Android folder
+        run: npx expo prebuild --platform android
+
+      # 5. Now we can make the generated gradlew executable
       - name: Make gradlew executable
-        run: chmod +x ./gradlew
+        run: chmod +x ./android/gradlew
 
+      # 6. Build the APK from inside the generated android directory
       - name: Build Debug APK
-        run: ./gradlew assembleDebug
+        run: cd android && ./gradlew assembleDebug
 
+      # 7. Upload the final APK (note the updated path)
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: app-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
-          retention-days: 7 # Deletes the artifact after a week to save storage
+          path: android/app/build/outputs/apk/debug/*.apk
+          retention-days: 7
