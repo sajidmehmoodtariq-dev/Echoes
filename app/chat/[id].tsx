@@ -1,13 +1,17 @@
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Audio } from 'expo-av';
+import * as DocumentPicker from 'expo-document-picker';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import {
     ActivityIndicator,
+    Alert,
     FlatList,
     ImageBackground,
     StatusBar,
     StyleSheet,
     Text,
+    TextInput,
     TouchableOpacity,
     View
 } from 'react-native';
@@ -46,12 +50,84 @@ export default function ChatScreen() {
 
     const [isAtBottom, setIsAtBottom] = useState(false);
 
+    // Playback State
+    const [isPlaying, setIsPlaying] = useState(false);
+    const [playbackSpeed, setPlaybackSpeed] = useState(1);
+    const [isCustomSpeed, setIsCustomSpeed] = useState(false);
+    const [customSpeedStr, setCustomSpeedStr] = useState('10');
+
+    // Audio State
+    const [audioSound, setAudioSound] = useState<Audio.Sound | null>(null);
+
+    const currentScrollY = useRef(0);
+    const isAtBottomRef = useRef(false);
+
+    // Unload audio on unmount
+    useEffect(() => {
+        return () => {
+            if (audioSound) {
+                audioSound.unloadAsync();
+            }
+        };
+    }, [audioSound]);
+
+    // Sync audio with play/pause
+    useEffect(() => {
+        if (audioSound) {
+            if (isPlaying) {
+                audioSound.playAsync();
+            } else {
+                audioSound.pauseAsync();
+            }
+        }
+    }, [isPlaying, audioSound]);
+
+    const pickAudio = async () => {
+        try {
+            const result = await DocumentPicker.getDocumentAsync({
+                type: ['audio/*'],
+            });
+            if (!result.canceled && result.assets && result.assets.length > 0) {
+                if (audioSound) {
+                    await audioSound.unloadAsync();
+                }
+                const { sound } = await Audio.Sound.createAsync(
+                    { uri: result.assets[0].uri },
+                    { shouldPlay: isPlaying, isLooping: true }
+                );
+                setAudioSound(sound);
+            }
+        } catch (err) {
+            console.error("Audio pick error:", err);
+            Alert.alert("Error", "Could not load the audio track.");
+        }
+    };
+
     const handleScroll = (event: any) => {
         const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+        currentScrollY.current = contentOffset.y;
+
         // Check if within 150px of bottom
         const bottomThreshold = contentSize.height - contentOffset.y - layoutMeasurement.height;
-        setIsAtBottom(bottomThreshold < 150);
+        const bottom = bottomThreshold < 150;
+        setIsAtBottom(bottom);
+        isAtBottomRef.current = bottom;
     };
+
+    useEffect(() => {
+        let interval: ReturnType<typeof setInterval>;
+        if (isPlaying && !isLoading) {
+            interval = setInterval(() => {
+                if (isAtBottomRef.current || !flatListRef.current) {
+                    setIsPlaying(false);
+                    return;
+                }
+                currentScrollY.current += (playbackSpeed * 1.5);
+                flatListRef.current.scrollToOffset({ offset: currentScrollY.current, animated: false });
+            }, 16);
+        }
+        return () => clearInterval(interval);
+    }, [isPlaying, playbackSpeed, isLoading]);
 
     const fetchMessages = async (pageNum: number, targetMsgId?: number) => {
         if (!id || (!hasMore && pageNum > 0 && !targetMsgId)) return;
@@ -126,17 +202,14 @@ export default function ChatScreen() {
             </View>
 
             <View style={styles.headerIcons}>
+                <TouchableOpacity style={styles.iconButton} onPress={() => setIsPlaying(!isPlaying)}>
+                    <Ionicons name={isPlaying ? "pause" : "play"} size={22} color="#fff" />
+                </TouchableOpacity>
                 <TouchableOpacity style={styles.iconButton} onPress={() => router.push(`/highlights/${id}` as any)}>
                     <Ionicons name="star" size={22} color="#fff" />
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.iconButton} onPress={() => router.push(`/analytics/${id}` as any)}>
                     <Ionicons name="stats-chart" size={22} color="#fff" />
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.iconButton}>
-                    <Ionicons name="call" size={20} color="#fff" />
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.iconButton}>
-                    <Ionicons name="ellipsis-vertical" size={22} color="#fff" />
                 </TouchableOpacity>
             </View>
         </View>
@@ -312,6 +385,7 @@ export default function ChatScreen() {
                         renderItem={renderMessage}
                         contentContainerStyle={styles.listContainer}
                         onScroll={handleScroll}
+                        onScrollBeginDrag={() => setIsPlaying(false)}
                         scrollEventThrottle={16}
                         // For a chat, you usually want to start at the bottom, or inverted. 
                         // We'll load top down for now (oldest first).
@@ -334,7 +408,7 @@ export default function ChatScreen() {
                 )}
             </ImageBackground>
 
-            {messages.length > 0 && (
+            {messages.length > 0 && !isPlaying && (
                 <TouchableOpacity
                     style={styles.scrollFab}
                     activeOpacity={0.8}
@@ -352,6 +426,56 @@ export default function ChatScreen() {
                         color={WA_COLORS.primary}
                     />
                 </TouchableOpacity>
+            )}
+
+            {/* Playback Controls */}
+            {isPlaying && (
+                <View style={[styles.playbackControls, isCustomSpeed && { paddingHorizontal: 12 }]}>
+                    <TouchableOpacity style={styles.playbackBtn} onPress={() => setIsPlaying(false)}>
+                        <Ionicons name="pause" size={24} color={WA_COLORS.primary} />
+                    </TouchableOpacity>
+
+                    {/* Audio track selector */}
+                    <TouchableOpacity style={styles.playbackBtn} onPress={pickAudio}>
+                        <Ionicons name="musical-notes" size={24} color={audioSound ? "#d81b60" : WA_COLORS.primary} />
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                        style={styles.playbackSpeedBtn}
+                        onPress={() => {
+                            if (isCustomSpeed) {
+                                setIsCustomSpeed(false);
+                                setPlaybackSpeed(1);
+                            } else if (playbackSpeed === 1) setPlaybackSpeed(2);
+                            else if (playbackSpeed === 2) setPlaybackSpeed(5);
+                            else if (playbackSpeed === 5) setPlaybackSpeed(10);
+                            else if (playbackSpeed === 10) {
+                                setIsCustomSpeed(true);
+                                setPlaybackSpeed(Number(customSpeedStr) || 10);
+                            } else {
+                                setPlaybackSpeed(1);
+                            }
+                        }}
+                    >
+                        <Text style={styles.playbackSpeedText}>
+                            {isCustomSpeed ? 'Custom' : `${playbackSpeed}x`}
+                        </Text>
+                    </TouchableOpacity>
+
+                    {isCustomSpeed && (
+                        <TextInput
+                            style={styles.customSpeedInput}
+                            keyboardType="numeric"
+                            value={customSpeedStr}
+                            onChangeText={t => {
+                                setCustomSpeedStr(t);
+                                setPlaybackSpeed(Number(t) || 10);
+                            }}
+                            placeholder="15"
+                            placeholderTextColor={WA_COLORS.textSecondary}
+                        />
+                    )}
+                </View>
             )}
         </SafeAreaView>
     );
@@ -526,4 +650,48 @@ const styles = StyleSheet.create({
         shadowRadius: 4.65,
         zIndex: 20,
     },
+    playbackControls: {
+        position: 'absolute',
+        bottom: 24,
+        alignSelf: 'center',
+        flexDirection: 'row',
+        backgroundColor: '#fff',
+        borderRadius: 30,
+        paddingHorizontal: 20,
+        paddingVertical: 10,
+        elevation: 6,
+        shadowColor: '#000',
+        shadowOpacity: 0.27,
+        shadowRadius: 4.65,
+        shadowOffset: { width: 0, height: 3 },
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 20,
+    },
+    playbackBtn: {
+        marginRight: 16,
+    },
+    playbackSpeedBtn: {
+        backgroundColor: WA_COLORS.chatBackground,
+        paddingHorizontal: 16,
+        paddingVertical: 6,
+        borderRadius: 16,
+    },
+    playbackSpeedText: {
+        color: WA_COLORS.primaryDark,
+        fontWeight: 'bold',
+        fontSize: 14,
+    },
+    customSpeedInput: {
+        backgroundColor: WA_COLORS.chatBackground,
+        paddingHorizontal: 8,
+        paddingVertical: 5,
+        borderRadius: 8,
+        marginLeft: 8,
+        width: 50,
+        textAlign: 'center',
+        color: WA_COLORS.primaryDark,
+        fontWeight: 'bold',
+        fontSize: 14,
+    }
 });
