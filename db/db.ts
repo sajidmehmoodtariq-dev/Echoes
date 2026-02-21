@@ -340,3 +340,72 @@ export async function getUsageByHourOfDay(chatId: number): Promise<{ hour: strin
         ORDER BY hour ASC
     `, [chatId]);
 }
+
+
+// ==========================================
+// MODULE 5: MEMORY HIGHLIGHTS QUERIES
+// ==========================================
+
+export async function getRandomHighlights(chatId: number, count: number = 5): Promise<(Message & { senderName?: string, chatName?: string })[]> {
+    // Fetches multiple random user messages with length > 25 characters
+    return await db.getAllAsync<Message & { senderName?: string, chatName?: string }>(`
+        SELECT 
+            m.id, m.chat_id as chatId, c.name as chatName, m.sender_id as senderId, 
+            m.timestamp, m.content, m.type, 
+            m.is_media_omitted as isMediaOmitted, 
+            m.media_uri as mediaUri, m.reply_to_id as replyToId,
+            m.sentiment_score as sentimentScore, m.is_meaningful as isMeaningful,
+            s.name as senderName
+        FROM messages m
+        JOIN chats c ON m.chat_id = c.id
+        LEFT JOIN senders s ON m.sender_id = s.id
+        WHERE m.chat_id = ? AND m.type = 'text' AND LENGTH(m.content) > 25
+        ORDER BY RANDOM()
+        LIMIT ?
+    `, [chatId, count]);
+}
+
+export async function getOnThisWeek(chatId: number): Promise<(Message & { senderName?: string, chatName?: string })[]> {
+    // Fetches messages from exactly the same calendar week (00-53) as today, but from previous years
+    return await db.getAllAsync<Message & { senderName?: string, chatName?: string }>(`
+        SELECT 
+            m.id, m.chat_id as chatId, c.name as chatName, m.sender_id as senderId, 
+            m.timestamp, m.content, m.type, 
+            m.is_media_omitted as isMediaOmitted, 
+            m.media_uri as mediaUri, m.reply_to_id as replyToId,
+            m.sentiment_score as sentimentScore, m.is_meaningful as isMeaningful,
+            s.name as senderName
+        FROM messages m
+        JOIN chats c ON m.chat_id = c.id
+        LEFT JOIN senders s ON m.sender_id = s.id
+        WHERE m.chat_id = ? 
+          AND m.type = 'text'
+          AND strftime('%W', m.timestamp / 1000, 'unixepoch', 'localtime') = strftime('%W', 'now', 'localtime')
+          AND strftime('%Y', m.timestamp / 1000, 'unixepoch', 'localtime') != strftime('%Y', 'now', 'localtime')
+        ORDER BY RANDOM()
+        LIMIT 5
+    `, [chatId]);
+}
+
+export async function getOnThisDay(chatId: number): Promise<(Message & { senderName?: string, chatName?: string })[]> {
+    // Fetches messages from exactly the same day and month as today, but from previous years
+    // Limit to 20 so UI isn't overwhelmed
+    return await db.getAllAsync<Message & { senderName?: string, chatName?: string }>(`
+        SELECT 
+            m.id, m.chat_id as chatId, c.name as chatName, m.sender_id as senderId, 
+            m.timestamp, m.content, m.type, 
+            m.is_media_omitted as isMediaOmitted, 
+            m.media_uri as mediaUri, m.reply_to_id as replyToId,
+            m.sentiment_score as sentimentScore, m.is_meaningful as isMeaningful,
+            s.name as senderName
+        FROM messages m
+        JOIN chats c ON m.chat_id = c.id
+        LEFT JOIN senders s ON m.sender_id = s.id
+        WHERE m.chat_id = ? 
+          AND m.type = 'text'
+          AND strftime('%m-%d', m.timestamp / 1000, 'unixepoch', 'localtime') = strftime('%m-%d', 'now', 'localtime')
+          AND strftime('%Y', m.timestamp / 1000, 'unixepoch', 'localtime') != strftime('%Y', 'now', 'localtime')
+        ORDER BY RANDOM()
+        LIMIT 10
+    `, [chatId]);
+}

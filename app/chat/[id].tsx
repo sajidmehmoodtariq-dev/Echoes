@@ -126,6 +126,9 @@ export default function ChatScreen() {
             </View>
 
             <View style={styles.headerIcons}>
+                <TouchableOpacity style={styles.iconButton} onPress={() => router.push(`/highlights/${id}` as any)}>
+                    <Ionicons name="star" size={22} color="#fff" />
+                </TouchableOpacity>
                 <TouchableOpacity style={styles.iconButton} onPress={() => router.push(`/analytics/${id}` as any)}>
                     <Ionicons name="stats-chart" size={22} color="#fff" />
                 </TouchableOpacity>
@@ -186,6 +189,21 @@ export default function ChatScreen() {
         }
     }, [messages, currentChat, meSender, myName]);
 
+    const formatDateHeader = (timestamp: number) => {
+        const d = new Date(timestamp);
+        const today = new Date();
+        const yesterday = new Date();
+        yesterday.setDate(today.getDate() - 1);
+
+        if (d.toDateString() === today.toDateString()) {
+            return "Today";
+        } else if (d.toDateString() === yesterday.toDateString()) {
+            return "Yesterday";
+        } else {
+            return d.toLocaleDateString([], { month: 'long', day: 'numeric', year: 'numeric' });
+        }
+    };
+
     const renderMessage = ({ item, index }: { item: UIType, index: number }) => {
         const isSystem = item.type === 'system';
         const isDeleted = item.type === 'deleted';
@@ -193,14 +211,43 @@ export default function ChatScreen() {
         // Align right if the sender is determined to be 'Me'. Otherwise align left.
         const isSentByMe = item.senderName === meSender;
 
+        let showDateHeader = false;
+        // Don't show date headers for fallback timestamp 0
+        if (item.timestamp > 0) {
+            if (index === 0) {
+                showDateHeader = true;
+            } else {
+                const prevItem = messages[index - 1];
+                if (prevItem && prevItem.timestamp > 0) {
+                    const currentDate = new Date(item.timestamp).toDateString();
+                    const prevDate = new Date(prevItem.timestamp).toDateString();
+                    if (currentDate !== prevDate) {
+                        showDateHeader = true;
+                    }
+                } else if (prevItem && prevItem.timestamp === 0) {
+                    // If exactly following a fallback message, show the date for this first real message
+                    showDateHeader = true;
+                }
+            }
+        }
+
+        const dateHeader = showDateHeader ? (
+            <View style={styles.dateHeaderContainer}>
+                <Text style={styles.dateHeaderText}>{formatDateHeader(item.timestamp)}</Text>
+            </View>
+        ) : null;
+
         if (isSystem) {
             // Hide parsing artifacts that are just a sender name and colon
             if (item.content.trim().match(/^.*?:\s*$/)) {
                 return null;
             }
             return (
-                <View style={styles.systemBubbleContainer}>
-                    <Text style={styles.systemBubbleText}>{item.content}</Text>
+                <View>
+                    {dateHeader}
+                    <View style={styles.systemBubbleContainer}>
+                        <Text style={styles.systemBubbleText}>{item.content}</Text>
+                    </View>
                 </View>
             );
         }
@@ -208,33 +255,36 @@ export default function ChatScreen() {
         const isHighlighted = item.id === highlightedMsgId;
 
         return (
-            <View style={[
-                styles.messageRow,
-                isSentByMe ? styles.messageRowSent : styles.messageRowReceived,
-                isHighlighted && styles.highlightedRow
-            ]}>
-                <View style={[styles.bubble, isSentByMe ? styles.bubbleSent : styles.bubbleReceived]}>
+            <View>
+                {dateHeader}
+                <View style={[
+                    styles.messageRow,
+                    isSentByMe ? styles.messageRowSent : styles.messageRowReceived,
+                    isHighlighted && styles.highlightedRow
+                ]}>
+                    <View style={[styles.bubble, isSentByMe ? styles.bubbleSent : styles.bubbleReceived]}>
 
-                    {!isSentByMe && item.senderName && (
-                        <Text style={[styles.senderName, { color: getStringColor(item.senderName) }]}>
-                            {item.senderName}
-                        </Text>
-                    )}
-
-                    {isDeleted ? (
-                        <View style={styles.deletedContainer}>
-                            <MaterialCommunityIcons name="cancel" size={16} color={WA_COLORS.textSecondary} style={{ marginRight: 4 }} />
-                            <Text style={styles.deletedText}>This message was deleted</Text>
-                        </View>
-                    ) : (
-                        <Text style={styles.messageText}>{item.content}</Text>
-                    )}
-
-                    <View style={styles.metaContainer}>
-                        <Text style={styles.timeText}>{formatMessageTime(item.timestamp)}</Text>
-                        {isSentByMe && (
-                            <Ionicons name="checkmark-done" size={16} color="#53bdeb" style={{ marginLeft: 4 }} />
+                        {!isSentByMe && item.senderName && (
+                            <Text style={[styles.senderName, { color: getStringColor(item.senderName) }]}>
+                                {item.senderName}
+                            </Text>
                         )}
+
+                        {isDeleted ? (
+                            <View style={styles.deletedContainer}>
+                                <MaterialCommunityIcons name="cancel" size={16} color={WA_COLORS.textSecondary} style={{ marginRight: 4 }} />
+                                <Text style={styles.deletedText}>This message was deleted</Text>
+                            </View>
+                        ) : (
+                            <Text style={styles.messageText}>{item.content}</Text>
+                        )}
+
+                        <View style={styles.metaContainer}>
+                            <Text style={styles.timeText}>{formatMessageTime(item.timestamp)}</Text>
+                            {isSentByMe && (
+                                <Ionicons name="checkmark-done" size={16} color="#53bdeb" style={{ marginLeft: 4 }} />
+                            )}
+                        </View>
                     </View>
                 </View>
             </View>
@@ -273,6 +323,12 @@ export default function ChatScreen() {
                             }
                         }}
                         onEndReachedThreshold={0.5}
+                        onScrollToIndexFailed={info => {
+                            const wait = new Promise(resolve => setTimeout(resolve, 500));
+                            wait.then(() => {
+                                flatListRef.current?.scrollToIndex({ index: info.index, animated: true, viewPosition: 0.5 });
+                            });
+                        }}
                         ListFooterComponent={isLoading && page > 0 ? <ActivityIndicator color={WA_COLORS.primary} /> : null}
                     />
                 )}
@@ -376,6 +432,19 @@ const styles = StyleSheet.create({
         color: WA_COLORS.textSecondary,
         fontSize: 12,
         textAlign: 'center',
+    },
+    dateHeaderContainer: {
+        alignSelf: 'center',
+        backgroundColor: 'rgba(226, 236, 246, 0.9)',
+        borderRadius: 8,
+        paddingVertical: 6,
+        paddingHorizontal: 12,
+        marginVertical: 12,
+    },
+    dateHeaderText: {
+        color: WA_COLORS.textSecondary,
+        fontSize: 12,
+        fontWeight: '500',
     },
     messageRow: {
         flexDirection: 'row',
