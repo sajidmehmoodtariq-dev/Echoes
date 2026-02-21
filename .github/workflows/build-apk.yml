@@ -17,7 +17,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "18" # You can change this to match your local Node version
+          node-version: "20" # Upgraded to Node 20 to support Array.toReversed() used by Metro Bundler
 
       # 2. Install your project packages
       - name: Install dependencies
