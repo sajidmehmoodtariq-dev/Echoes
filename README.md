@@ -1,50 +1,53 @@
-# Welcome to your Expo app 👋
+# Echoes (WhatsApp Chat Archive)
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Echoes is a local-first, offline mobile application built with React Native and Expo that allows you to import, parse, store, and visualize exported WhatsApp chat logs (`.txt` or `.zip` archives). 
 
-## Get started
+It meticulously recreates the familiar WhatsApp UI so you can comfortably read, search, and analyze your historical conversations without relying on cloud services or keeping cumbersome text files around.
 
-1. Install dependencies
+## ✨ Features
 
+- **Robust Chat Parsing:** Built-in regex parsers capable of handling both iOS and Android WhatsApp export formats, reliably extracting timestamps, senders, and multiline messages.
+- **Lightning Fast Search:** Utilizes advanced SQLite optimizations including FTS5 (Full-Text Search) virtual tables, allowing instantaneous global searches across thousands of archived messages.
+- **Cinematic Playback:** Upload an audio track to play synchronously while the message viewer auto-scrolls through the chat. Supports variable and custom playback speeds (up to 10x+).
+- **Privacy & Local-First:** 100% offline. All chats are processed entirely in-memory and stored in the device's local SQLite database. No web APIs or external servers are involved.
+- **Advanced Metrics:** Queries designed to support analytics (total messages, active days, usage by hour/day) and memory highlights ("On this day").
+- **Familiar UI:** Implements WhatsApp's signature visual cues, including deterministic color coding for group chat members, "sent by me" bubble alignment, system message styling, and dynamic date headers.
+
+## 🛠 Tech Stack
+
+- **Frontend:** React Native, Expo (SDK 54), Expo Router (File-based navigation)
+- **Database:** `expo-sqlite` (with FTS5 indexing and async transaction controls)
+- **Utilities:** `jszip` (in-memory archive extraction), `expo-document-picker`, `expo-av` (audio)
+
+## 🚀 Getting Started
+
+### Prerequisites
+Ensure you have Node.js installed, along with the standard React Native / Expo environment components.
+
+### Installation
+
+1. Clone the repository and navigate into the directory:
+   ```bash
+   git clone https://github.com/your-username/whatsapp-chat.git
+   cd whatsapp-chat
+   ```
+
+2. Install dependencies:
    ```bash
    npm install
    ```
 
-2. Start the app
-
+3. Start the application:
    ```bash
    npx expo start
    ```
 
-In the output, you'll find options to open the app in a
+4. Press `a` to open in the Android emulator, `i` for iOS simulator, or scan the QR code with the Expo Go app.
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+## 📖 How to Use
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
-```bash
-npm run reset-project
-```
-
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
-
-## Learn more
-
-To learn more about developing your project with Expo, look at the following resources:
-
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+1. Go to WhatsApp on your mobile device and open any chat.
+2. Tap **More > Export Chat** (Choose "Without Media").
+3. Save or send the resulting `.txt` or `.zip` file to your device.
+4. Open the Echoes app, tap the **import button** on the home screen, and select your exported file.
+5. The application will immediately parse and save the chat locally, creating a beautiful interface for seamless offline reading!
