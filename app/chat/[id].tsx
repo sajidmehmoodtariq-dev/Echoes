@@ -16,6 +16,7 @@ import {
     View
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import MediaBubble from '../../components/MediaBubble';
 import { useChatContext } from '../../context/ChatContext';
 import { getMessageNeighborhood, getMessages, Message } from '../../db/db';
 
@@ -348,6 +349,23 @@ export default function ChatScreen() {
                                 <MaterialCommunityIcons name="cancel" size={16} color={WA_COLORS.textSecondary} style={{ marginRight: 4 }} />
                                 <Text style={styles.deletedText}>This message was deleted</Text>
                             </View>
+                        ) : item.mediaUri ? (
+                            <View>
+                                <MediaBubble
+                                    mediaUri={item.mediaUri}
+                                    type={item.type}
+                                    content={item.content}
+                                />
+                                {/* Show caption text if content has more than just the filename */}
+                                {item.content && !item.content.match(/^.+?\.\w+\s*\(file attached\)\s*$/i) && !item.content.match(/<attached:\s*.+?\.\w+>/i) && item.type !== 'audio' && (
+                                    <Text style={styles.messageText}>{item.content}</Text>
+                                )}
+                            </View>
+                        ) : item.isMediaOmitted ? (
+                            <View style={styles.mediaOmittedContainer}>
+                                <Ionicons name="image-outline" size={18} color={WA_COLORS.textSecondary} style={{ marginRight: 6 }} />
+                                <Text style={styles.mediaOmittedText}>{item.content || '<media omitted>'}</Text>
+                            </View>
                         ) : (
                             <Text style={styles.messageText}>{item.content}</Text>
                         )}
@@ -620,6 +638,19 @@ const styles = StyleSheet.create({
     },
     deletedText: {
         fontSize: 15,
+        color: WA_COLORS.textSecondary,
+        fontStyle: 'italic',
+    },
+    mediaOmittedContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#f0f2f5',
+        borderRadius: 8,
+        paddingVertical: 10,
+        paddingHorizontal: 12,
+    },
+    mediaOmittedText: {
+        fontSize: 14,
         color: WA_COLORS.textSecondary,
         fontStyle: 'italic',
     },

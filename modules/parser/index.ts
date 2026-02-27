@@ -1,3 +1,4 @@
+import { extractAttachmentFilename } from '../media/extractor';
 import { detectMessageType } from './detectors';
 import { sanitizeContent } from './sanitizer';
 import { ANDROID_REGEX } from './strategies/android';
@@ -105,19 +106,28 @@ export function parseWhatsAppChat(rawText: string, fileName: string = 'Imported 
             // Determine the precise message type
             const type = detectMessageType(messageBody, senderStr);
 
+            // Check if media is omitted or attached
+            const hasMediaOmitted = messageBody.toLowerCase().includes('<media omitted>');
+            const attachmentFilename = extractAttachmentFilename(messageBody);
+
             const newMessage: Message = {
                 id: currentLineNumber, // Temporary proxy ID
                 chatId: 0, // Placeholder, DB will assign
                 timestamp: parseDate(dateStr, timeStr),
                 content: messageBody,
                 type: type,
-                isMediaOmitted: type === 'image' && messageBody.includes('omitted'),
+                isMediaOmitted: hasMediaOmitted,
                 senderId: 0, // Placeholder, bound later
                 rawText: unSanitizedLine, // Store original raw for debugging module 1 later
             };
 
             // Hack to retain raw sender name string for DB syncing
             (newMessage as any)._rawSender = senderStr;
+
+            // Store the extracted attachment filename for media linking
+            if (attachmentFilename) {
+                (newMessage as any)._attachmentFilename = attachmentFilename;
+            }
 
             messages.push(newMessage);
             lastMessage = newMessage;

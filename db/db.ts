@@ -180,8 +180,8 @@ export async function insertParsedChat(parsedData: ParseResult): Promise<number>
         // 3. Batch Insert Messages
         const statement = await db.prepareAsync(`
             INSERT INTO messages (
-                chat_id, sender_id, timestamp, content, type, is_media_omitted, raw_text
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                chat_id, sender_id, timestamp, content, type, is_media_omitted, media_uri, raw_text
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
         try {
@@ -198,6 +198,7 @@ export async function insertParsedChat(parsedData: ParseResult): Promise<number>
                     msg.content,
                     msg.type,
                     msg.isMediaOmitted ? 1 : 0,
+                    msg.mediaUri || null,
                     msg.rawText || ''
                 ]);
             }

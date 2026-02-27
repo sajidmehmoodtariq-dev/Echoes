@@ -1,8 +1,7 @@
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
-
+import { Directory, File as ExpoFile, Paths } from 'expo-file-system';
 import { useRouter } from 'expo-router';
-import JSZip from 'jszip';
 import React, { useState } from 'react';
 import {
     ActivityIndicator,
@@ -16,8 +15,10 @@ import {
     View
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { unzip, subscribe } from 'react-native-zip-archive';
 import { useChatContext } from '../context/ChatContext';
 import { insertParsedChat } from '../db/db';
+import { extractMediaFromDirectory, findChatTxtFile } from '../modules/media/extractor';
 import { parseWhatsAppChat } from '../modules/parser';
 
 // WhatsApp Brand Colors (Modern Android)
@@ -35,6 +36,7 @@ const WA_COLORS = {
 
 export default function Index() {
     const [isParsing, setIsParsing] = useState(false);
+    const [importStatus, setImportStatus] = useState('');
 
     // Global State
     const { chats, refreshChats, isLoading, setActiveChatId, removeChat } = useChatContext();
@@ -63,27 +65,65 @@ export default function Index() {
             // finish smoothly before we execute heavy synchronous blocking CPU operations.
             InteractionManager.runAfterInteractions(async () => {
                 try {
-                    // 1. Read
+                    // 1. Read file — for zips, extract NATIVELY to disk (zero JS memory)
                     let fileContent = '';
                     let chatFileName = file.name;
+                    let mediaMap: Map<string, string> | null = null;
 
                     if (file.name.endsWith('.zip')) {
-                        // Read ZIP as ArrayBuffer via fetch
-                        const response = await fetch(file.uri);
-                        const arrayBuffer = await response.arrayBuffer();
-                        const zip = await JSZip.loadAsync(arrayBuffer);
-                        const txtFiles = Object.keys(zip.files).filter(name => name.endsWith('.txt') && !name.startsWith('__MACOSX'));
+                        setImportStatus('Extracting zip natively...');
 
-                        if (txtFiles.length === 0) {
-                            throw new Error("No .txt chat export found inside the selected zip file.");
+                        // Create a temp directory for extraction
+                        const importId = `import_${Date.now()}`;
+                        const tempExtractDir = new Directory(Paths.cache, `zip_extract_${importId}`);
+                        if (!tempExtractDir.exists) {
+                            tempExtractDir.create();
                         }
 
-                        chatFileName = txtFiles[0]; // Usually "_chat.txt" or "WhatsApp Chat..."
-                        fileContent = await zip.files[chatFileName].async('string');
+                        // Subscribe to native progress events
+                        const progressSub = subscribe(({ progress, filePath }) => {
+                            const pct = Math.round(progress * 100);
+                            setImportStatus(`Extracting zip... ${pct}%`);
+                        });
+
+                        try {
+                            // Native unzip — runs entirely in Java/ObjC, never loads full zip into JS memory
+                            const sourcePath = file.uri.startsWith('file://') ? file.uri.slice(7) : file.uri;
+                            await unzip(sourcePath, tempExtractDir.uri);
+                        } finally {
+                            progressSub.remove();
+                        }
+
+                        // Find the .txt chat file in extracted contents
+                        setImportStatus('Reading chat text...');
+                        const extractedDir = new Directory(tempExtractDir.uri);
+                        const txtFile = findChatTxtFile(extractedDir);
+                        if (!txtFile) {
+                            throw new Error("No .txt chat export found inside the zip file.");
+                        }
+
+                        chatFileName = txtFile.name;
+
+                        // Read ONLY the small text file into memory (typically a few MB)
+                        fileContent = await txtFile.text();
+
+                        // Move media files to permanent storage, build filename → URI map
+                        setImportStatus('Organizing media files...');
+                        mediaMap = extractMediaFromDirectory(extractedDir, importId);
+
+                        // Clean up the temp extraction folder (media already moved out)
+                        try {
+                            if (tempExtractDir.exists) {
+                                tempExtractDir.delete();
+                            }
+                        } catch (cleanupErr) {
+                            console.warn('[Import] Temp cleanup failed:', cleanupErr);
+                        }
                     } else {
-                        // Standard text reading
-                        const response = await fetch(file.uri);
-                        fileContent = await response.text();
+                        // Read text file using native File API
+                        setImportStatus('Reading text file...');
+                        const expoFile = new ExpoFile(file.uri);
+                        fileContent = await expoFile.text();
                     }
 
                     // Clean the display name
@@ -97,27 +137,48 @@ export default function Index() {
                     // 2. Parse Memory
                     // For truly massive files (100MB+), this will block JS thread. 
                     // To do better involves worklets/native modules, but interaction manager helps ease the transition.
+                    setImportStatus('Parsing messages...');
                     const timestampA = Date.now();
                     const parsedData = parseWhatsAppChat(fileContent, cleanName);
+
+                    // Free raw text immediately after parsing
+                    fileContent = '';
 
                     // Validate output
                     if (parsedData.messages.length === 0) {
                         setIsParsing(false);
+                        setImportStatus('');
                         Alert.alert("Parsing Failed", "No messages found. It might not be a valid export.");
                         return;
                     }
 
+                    // 3. Link media URIs to messages
+                    setImportStatus('Linking media to messages...');
+                    let mediaCount = 0;
+                    if (mediaMap && mediaMap.size > 0) {
+                        for (const msg of parsedData.messages) {
+                            const attachmentName = (msg as any)._attachmentFilename;
+                            if (attachmentName) {
+                                const localUri = mediaMap.get(attachmentName.toLowerCase());
+                                if (localUri) {
+                                    msg.mediaUri = localUri;
+                                    msg.isMediaOmitted = false;
+                                    mediaCount++;
+                                }
+                            }
+                        }
+                        console.log(`[Import] Linked ${mediaCount}/${mediaMap.size} media files to messages.`);
+                    }
+
+                    setImportStatus('Saving to database...');
                     const insertedId = await insertParsedChat(parsedData);
                     const timestampB = Date.now();
-
-                    // Cleanup Memory immediately referencing JS engine
-                    fileContent.length; // Force evaluation
 
                     // We DO NOT call refreshChats or setIsParsing here yet for giant files. 
                     // Let the UI breathe, fire the alert, and do cleanup after the user taps OK.
                     Alert.alert(
                         "Import Successful",
-                        `Saved ${parsedData.messages.length} messages in ${timestampB - timestampA}ms.\nPlatform: ${parsedData.chat.sourcePlatform}`,
+                        `Saved ${parsedData.messages.length} messages in ${timestampB - timestampA}ms.\nPlatform: ${parsedData.chat.sourcePlatform}${mediaCount > 0 ? `\nMedia files: ${mediaCount}` : ''}`,
                         [
                             {
                                 text: "OK",
@@ -126,6 +187,7 @@ export default function Index() {
                                     setTimeout(async () => {
                                         await refreshChats();
                                         setIsParsing(false);
+                                        setImportStatus('');
                                     }, 100);
                                 }
                             }
@@ -134,12 +196,14 @@ export default function Index() {
 
                 } catch (parseOrDbError: any) {
                     setIsParsing(false);
+                    setImportStatus('');
                     Alert.alert("Processing Error", parseOrDbError.message || "Failed to process chat.");
                 }
             });
 
         } catch (err: any) {
             setIsParsing(false);
+            setImportStatus('');
             Alert.alert("File Selection Failed", err.message || "Could not read the selected file.");
         }
     };
@@ -259,7 +323,7 @@ export default function Index() {
             {isParsing && (
                 <View style={styles.parsingOverlay}>
                     <ActivityIndicator size="large" color={WA_COLORS.primary} />
-                    <Text style={styles.parsingText}>Reading and processing thousands of messages...</Text>
+                    <Text style={styles.parsingText}>{importStatus || 'Processing...'}</Text>
                 </View>
             )}
 
