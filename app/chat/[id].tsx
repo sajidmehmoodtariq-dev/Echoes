@@ -2,12 +2,14 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
 import * as DocumentPicker from 'expo-document-picker';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
     FlatList,
     ImageBackground,
+    Modal,
+    Pressable,
     StatusBar,
     StyleSheet,
     Text,
@@ -18,7 +20,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import MediaBubble from '../../components/MediaBubble';
 import { useChatContext } from '../../context/ChatContext';
-import { getMessageNeighborhood, getMessages, Message } from '../../db/db';
+import { getMessageNeighborhood, getMessages, Message, searchMessagesInChat } from '../../db/db';
 
 const WA_COLORS = {
     primary: '#008069',
@@ -62,6 +64,16 @@ export default function ChatScreen() {
 
     const currentScrollY = useRef(0);
     const isAtBottomRef = useRef(false);
+
+    // Dropdown menu state
+    const [menuVisible, setMenuVisible] = useState(false);
+
+    // In-chat search state
+    const [searchMode, setSearchMode] = useState(false);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [searchResults, setSearchResults] = useState<UIType[]>([]);
+    const [isSearching, setIsSearching] = useState(false);
+    const searchInputRef = useRef<TextInput>(null);
 
     // Unload audio on unmount
     useEffect(() => {
@@ -184,37 +196,223 @@ export default function ChatScreen() {
         }
     }, [id, msgId]);
 
-    const renderHeader = () => (
-        <View style={styles.header}>
-            <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-                <Ionicons name="arrow-back" size={24} color="#fff" />
-                <View style={styles.avatarMini}>
-                    <Ionicons name="people" size={20} color="#fff" />
-                </View>
-            </TouchableOpacity>
+    // In-chat search logic
+    const executeSearch = useCallback(async (q: string) => {
+        if (q.trim().length < 2) {
+            setSearchResults([]);
+            return;
+        }
+        setIsSearching(true);
+        try {
+            const results = await searchMessagesInChat(Number(id), q);
+            setSearchResults(results as UIType[]);
+        } catch (err) {
+            console.error('In-chat search error:', err);
+        } finally {
+            setIsSearching(false);
+        }
+    }, [id]);
 
-            <View style={styles.headerTitleContainer}>
-                <Text style={styles.headerTitle} numberOfLines={1}>
-                    {currentChat?.name || 'Chat'}
-                </Text>
-                <Text style={styles.headerSubtitle} numberOfLines={1}>
-                    Tap here for group info
-                </Text>
-            </View>
+    useEffect(() => {
+        if (!searchMode) return;
+        const timeout = setTimeout(() => executeSearch(searchQuery), 400);
+        return () => clearTimeout(timeout);
+    }, [searchQuery, searchMode]);
 
-            <View style={styles.headerIcons}>
-                <TouchableOpacity style={styles.iconButton} onPress={() => setIsPlaying(!isPlaying)}>
-                    <Ionicons name={isPlaying ? "pause" : "play"} size={22} color="#fff" />
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.iconButton} onPress={() => router.push(`/highlights/${id}` as any)}>
-                    <Ionicons name="star" size={22} color="#fff" />
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.iconButton} onPress={() => router.push(`/analytics/${id}` as any)}>
-                    <Ionicons name="stats-chart" size={22} color="#fff" />
-                </TouchableOpacity>
+    const jumpToMessage = (targetMsgId: number) => {
+        setSearchMode(false);
+        setSearchQuery('');
+        setSearchResults([]);
+        setHighlightedMsgId(targetMsgId);
+        // Reload messages centered on the target
+        fetchMessages(0, targetMsgId);
+    };
+
+    const closeSearch = () => {
+        setSearchMode(false);
+        setSearchQuery('');
+        setSearchResults([]);
+        setHighlightedMsgId(null);
+    };
+
+    const formatSearchTime = (timestamp: number) => {
+        const d = new Date(timestamp);
+        return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) +
+            ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    };
+
+    const renderSearchResultItem = ({ item }: { item: UIType }) => (
+        <TouchableOpacity
+            style={styles.searchResultItem}
+            activeOpacity={0.7}
+            onPress={() => jumpToMessage(item.id)}
+        >
+            <View style={styles.searchResultHeader}>
+                {item.senderName && (
+                    <Text style={[styles.searchResultSender, { color: getStringColor(item.senderName) }]} numberOfLines={1}>
+                        {item.senderName}
+                    </Text>
+                )}
+                <Text style={styles.searchResultTime}>{formatSearchTime(item.timestamp)}</Text>
             </View>
-        </View>
+            <Text style={styles.searchResultContent} numberOfLines={2}>
+                {item.content}
+            </Text>
+        </TouchableOpacity>
     );
+
+    const renderSearchOverlay = () => {
+        if (!searchMode) return null;
+        return (
+            <View style={styles.searchOverlay}>
+                {/* Search bar */}
+                <View style={styles.searchBar}>
+                    <TouchableOpacity onPress={closeSearch} style={styles.searchBackBtn}>
+                        <Ionicons name="arrow-back" size={24} color={WA_COLORS.textPrimary} />
+                    </TouchableOpacity>
+                    <TextInput
+                        ref={searchInputRef}
+                        style={styles.searchInput}
+                        placeholder="Search in chat..."
+                        placeholderTextColor={WA_COLORS.textSecondary}
+                        value={searchQuery}
+                        onChangeText={setSearchQuery}
+                        autoFocus
+                        returnKeyType="search"
+                    />
+                    {searchQuery.length > 0 && (
+                        <TouchableOpacity onPress={() => setSearchQuery('')} style={styles.searchClearBtn}>
+                            <Ionicons name="close-circle" size={20} color={WA_COLORS.textSecondary} />
+                        </TouchableOpacity>
+                    )}
+                </View>
+
+                {/* Results */}
+                {isSearching ? (
+                    <View style={styles.searchCenterContainer}>
+                        <ActivityIndicator size="large" color={WA_COLORS.primary} />
+                    </View>
+                ) : searchQuery.trim().length < 2 ? (
+                    <View style={styles.searchCenterContainer}>
+                        <Ionicons name="search" size={48} color="#e9edef" />
+                        <Text style={styles.searchPlaceholderText}>Search messages in this chat</Text>
+                    </View>
+                ) : searchResults.length === 0 ? (
+                    <View style={styles.searchCenterContainer}>
+                        <Ionicons name="search" size={48} color="#e9edef" />
+                        <Text style={styles.searchPlaceholderText}>No messages found</Text>
+                    </View>
+                ) : (
+                    <>
+                        <View style={styles.searchResultsCount}>
+                            <Text style={styles.searchResultsCountText}>
+                                {searchResults.length} result{searchResults.length !== 1 ? 's' : ''}
+                            </Text>
+                        </View>
+                        <FlatList
+                            data={searchResults}
+                            keyExtractor={item => item.id.toString()}
+                            renderItem={renderSearchResultItem}
+                            contentContainerStyle={styles.searchResultsList}
+                            keyboardShouldPersistTaps="handled"
+                        />
+                    </>
+                )}
+            </View>
+        );
+    };
+
+    const renderHeader = () => {
+        return (
+            <View style={styles.header}>
+                <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+                    <Ionicons name="arrow-back" size={24} color="#fff" />
+                    <View style={styles.avatarMini}>
+                        <Ionicons name="people" size={20} color="#fff" />
+                    </View>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                    style={styles.headerTitleContainer}
+                    activeOpacity={0.7}
+                    onPress={() => router.push(`/gallery/${id}` as any)}
+                >
+                    <Text style={styles.headerTitle} numberOfLines={1}>
+                        {currentChat?.name || 'Chat'}
+                    </Text>
+                    <Text style={styles.headerSubtitle} numberOfLines={1}>
+                        Tap here for media & gallery
+                    </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={styles.iconButton} onPress={() => setMenuVisible(true)}>
+                    <Ionicons name="ellipsis-vertical" size={22} color="#fff" />
+                </TouchableOpacity>
+
+                {/* Dropdown Menu */}
+                <Modal visible={menuVisible} transparent animationType="fade">
+                    <Pressable style={styles.menuOverlay} onPress={() => setMenuVisible(false)}>
+                        <View style={styles.menuDropdown}>
+                            <TouchableOpacity
+                                style={styles.menuItem}
+                                onPress={() => {
+                                    setMenuVisible(false);
+                                    setSearchMode(true);
+                                }}
+                            >
+                                <Ionicons name="search" size={20} color={WA_COLORS.textPrimary} />
+                                <Text style={styles.menuItemText}>Search</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                                style={styles.menuItem}
+                                onPress={() => {
+                                    setMenuVisible(false);
+                                    setIsPlaying(!isPlaying);
+                                }}
+                            >
+                                <Ionicons name={isPlaying ? 'pause' : 'play'} size={20} color={WA_COLORS.textPrimary} />
+                                <Text style={styles.menuItemText}>{isPlaying ? 'Pause Playback' : 'Playback'}</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                                style={styles.menuItem}
+                                onPress={() => {
+                                    setMenuVisible(false);
+                                    router.push(`/gallery/${id}` as any);
+                                }}
+                            >
+                                <Ionicons name="images" size={20} color={WA_COLORS.textPrimary} />
+                                <Text style={styles.menuItemText}>Media Gallery</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                                style={styles.menuItem}
+                                onPress={() => {
+                                    setMenuVisible(false);
+                                    router.push(`/highlights/${id}` as any);
+                                }}
+                            >
+                                <Ionicons name="star" size={20} color={WA_COLORS.textPrimary} />
+                                <Text style={styles.menuItemText}>Highlights</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                                style={[styles.menuItem, { borderBottomWidth: 0 }]}
+                                onPress={() => {
+                                    setMenuVisible(false);
+                                    router.push(`/analytics/${id}` as any);
+                                }}
+                            >
+                                <Ionicons name="stats-chart" size={20} color={WA_COLORS.textPrimary} />
+                                <Text style={styles.menuItemText}>Analytics</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </Pressable>
+                </Modal>
+            </View>
+        );
+    };
 
     const formatMessageTime = (timestamp: number) => {
         const d = new Date(timestamp);
@@ -426,7 +624,9 @@ export default function ChatScreen() {
                 )}
             </ImageBackground>
 
-            {messages.length > 0 && !isPlaying && (
+            {renderSearchOverlay()}
+
+            {messages.length > 0 && !isPlaying && !searchMode && (
                 <TouchableOpacity
                     style={styles.scrollFab}
                     activeOpacity={0.8}
@@ -541,13 +741,126 @@ const styles = StyleSheet.create({
         color: 'rgba(255,255,255,0.8)',
         fontSize: 13,
     },
-    headerIcons: {
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
     iconButton: {
         padding: 10,
         marginLeft: 4,
+    },
+    // Dropdown menu
+    menuOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.25)',
+    },
+    menuDropdown: {
+        position: 'absolute',
+        top: 50,
+        right: 12,
+        backgroundColor: '#fff',
+        borderRadius: 8,
+        minWidth: 200,
+        elevation: 8,
+        shadowColor: '#000',
+        shadowOpacity: 0.25,
+        shadowRadius: 8,
+        shadowOffset: { width: 0, height: 4 },
+        paddingVertical: 4,
+    },
+    menuItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 13,
+        paddingHorizontal: 16,
+        borderBottomWidth: StyleSheet.hairlineWidth,
+        borderBottomColor: '#e9edef',
+    },
+    menuItemText: {
+        fontSize: 15,
+        color: '#111b21',
+        marginLeft: 14,
+        fontWeight: '400',
+    },
+    // In-chat search bar
+    searchBar: {
+        backgroundColor: '#fff',
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 6,
+        paddingHorizontal: 8,
+        elevation: 4,
+        zIndex: 10,
+    },
+    searchBackBtn: {
+        padding: 6,
+        marginRight: 4,
+    },
+    searchInput: {
+        flex: 1,
+        fontSize: 16,
+        color: '#111b21',
+        paddingVertical: 6,
+        paddingHorizontal: 8,
+    },
+    searchClearBtn: {
+        padding: 6,
+    },
+    // Search overlay (covers the chat area)
+    searchOverlay: {
+        ...StyleSheet.absoluteFillObject,
+        backgroundColor: '#fff',
+        zIndex: 50,
+    },
+    searchCenterContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        paddingHorizontal: 32,
+    },
+    searchPlaceholderText: {
+        fontSize: 15,
+        color: '#667781',
+        marginTop: 12,
+        textAlign: 'center',
+    },
+    searchResultsCount: {
+        paddingHorizontal: 16,
+        paddingVertical: 8,
+        backgroundColor: '#f0f2f5',
+        borderBottomWidth: StyleSheet.hairlineWidth,
+        borderBottomColor: '#e9edef',
+    },
+    searchResultsCountText: {
+        fontSize: 13,
+        color: '#667781',
+        fontWeight: '500',
+    },
+    searchResultsList: {
+        paddingBottom: 20,
+    },
+    searchResultItem: {
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        borderBottomWidth: StyleSheet.hairlineWidth,
+        borderBottomColor: '#e9edef',
+    },
+    searchResultHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 3,
+    },
+    searchResultSender: {
+        fontSize: 14,
+        fontWeight: '600',
+        flex: 1,
+    },
+    searchResultTime: {
+        fontSize: 12,
+        color: '#667781',
+        marginLeft: 8,
+    },
+    searchResultContent: {
+        fontSize: 14,
+        color: '#111b21',
+        lineHeight: 20,
     },
     chatBackground: {
         flex: 1,

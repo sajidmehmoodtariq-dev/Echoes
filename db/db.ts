@@ -268,6 +268,56 @@ export async function searchMessages(query: string, limit: number = 50): Promise
 }
 
 // ==========================================
+// MODULE 3B: IN-CHAT SEARCH
+// ==========================================
+
+/**
+ * Searches messages within a specific chat using FTS5.
+ * Returns matching messages with sender info, ordered by relevance.
+ */
+export async function searchMessagesInChat(
+    chatId: number,
+    query: string,
+    limit: number = 100
+): Promise<(Message & { senderName?: string })[]> {
+    if (!query.trim()) return [];
+
+    const ftsQuery = query.trim().split(/\s+/).map(term => `"${term}"*`).join(' AND ');
+
+    try {
+        return await db.getAllAsync<Message & { senderName?: string }>(`
+            SELECT 
+                m.id, m.chat_id as chatId, m.sender_id as senderId, 
+                m.timestamp, m.content, m.type, 
+                m.is_media_omitted as isMediaOmitted, 
+                m.media_uri as mediaUri, m.reply_to_id as replyToId,
+                s.name as senderName
+            FROM messages_fts fts
+            JOIN messages m ON fts.rowid = m.id
+            LEFT JOIN senders s ON m.sender_id = s.id
+            WHERE messages_fts MATCH ? AND m.chat_id = ?
+            ORDER BY m.timestamp ASC
+            LIMIT ?
+        `, [ftsQuery, chatId, limit]);
+    } catch (err) {
+        console.warn("FTS5 in-chat search failed, falling back to LIKE:", err);
+        return await db.getAllAsync<Message & { senderName?: string }>(`
+            SELECT 
+                m.id, m.chat_id as chatId, m.sender_id as senderId, 
+                m.timestamp, m.content, m.type, 
+                m.is_media_omitted as isMediaOmitted, 
+                m.media_uri as mediaUri, m.reply_to_id as replyToId,
+                s.name as senderName
+            FROM messages m
+            LEFT JOIN senders s ON m.sender_id = s.id
+            WHERE m.chat_id = ? AND m.content LIKE ?
+            ORDER BY m.timestamp ASC
+            LIMIT ?
+        `, [chatId, `%${query}%`, limit]);
+    }
+}
+
+// ==========================================
 // MODULE 4: ANALYTICS DASHBOARD QUERIES
 // ==========================================
 
@@ -385,6 +435,25 @@ export async function getOnThisWeek(chatId: number): Promise<(Message & { sender
           AND strftime('%Y', m.timestamp / 1000, 'unixepoch', 'localtime') != strftime('%Y', 'now', 'localtime')
         ORDER BY RANDOM()
         LIMIT 5
+    `, [chatId]);
+}
+
+/**
+ * Fetches all messages with media (media_uri IS NOT NULL) for a chat.
+ * Used by the gallery view. Ordered newest-first.
+ */
+export async function getMediaMessages(chatId: number): Promise<(Message & { senderName?: string })[]> {
+    return await db.getAllAsync<Message & { senderName?: string }>(`
+        SELECT 
+            m.id, m.chat_id as chatId, m.sender_id as senderId, 
+            m.timestamp, m.content, m.type, 
+            m.is_media_omitted as isMediaOmitted, 
+            m.media_uri as mediaUri, m.reply_to_id as replyToId,
+            s.name as senderName
+        FROM messages m
+        LEFT JOIN senders s ON m.sender_id = s.id
+        WHERE m.chat_id = ? AND m.media_uri IS NOT NULL
+        ORDER BY m.timestamp DESC
     `, [chatId]);
 }
 
