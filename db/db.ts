@@ -479,3 +479,187 @@ export async function getOnThisDay(chatId: number): Promise<(Message & { senderN
         LIMIT 10
     `, [chatId]);
 }
+
+// ==========================================
+// MODULE 7: BACKUP / RESTORE
+// ==========================================
+
+export interface ExportedMessage {
+    timestamp: number;
+    senderName: string | null;
+    content: string;
+    type: string;
+    isMediaOmitted: boolean;
+    mediaFilename: string | null; // relative filename, not absolute path
+    rawText: string;
+}
+
+export interface ChatExport {
+    version: number; // schema version for future compatibility
+    exportDate: number;
+    chat: {
+        name: string;
+        sourcePlatform: string;
+        importDate: number;
+    };
+    senders: string[];
+    messages: ExportedMessage[];
+}
+
+/**
+ * Exports a complete chat with all messages and sender info as a JSON-serializable object.
+ * Media URIs are converted to just the filename for portability.
+ */
+export async function getFullChatExport(chatId: number): Promise<ChatExport | null> {
+    // 1. Get chat metadata
+    const chat = await db.getFirstAsync<{
+        name: string;
+        sourcePlatform: string;
+        importDate: number;
+    }>(
+        `SELECT name, source_platform as sourcePlatform, import_date as importDate 
+         FROM chats WHERE id = ?`,
+        [chatId],
+    );
+    if (!chat) return null;
+
+    // 2. Get all unique sender names for this chat
+    const senderRows = await db.getAllAsync<{ name: string }>(
+        `SELECT DISTINCT s.name 
+         FROM messages m 
+         JOIN senders s ON m.sender_id = s.id 
+         WHERE m.chat_id = ?`,
+        [chatId],
+    );
+    const senders = senderRows.map(r => r.name);
+
+    // 3. Get all messages
+    const messages = await db.getAllAsync<{
+        timestamp: number;
+        senderName: string | null;
+        content: string;
+        type: string;
+        isMediaOmitted: number;
+        mediaUri: string | null;
+        rawText: string;
+    }>(
+        `SELECT 
+            m.timestamp, s.name as senderName, m.content, m.type,
+            m.is_media_omitted as isMediaOmitted, m.media_uri as mediaUri,
+            m.raw_text as rawText
+         FROM messages m
+         LEFT JOIN senders s ON m.sender_id = s.id
+         WHERE m.chat_id = ?
+         ORDER BY m.timestamp ASC, m.id ASC`,
+        [chatId],
+    );
+
+    // 4. Convert mediaUri to just filename for portability
+    const exportedMessages: ExportedMessage[] = messages.map(m => ({
+        timestamp: m.timestamp,
+        senderName: m.senderName,
+        content: m.content,
+        type: m.type,
+        isMediaOmitted: !!m.isMediaOmitted,
+        mediaFilename: m.mediaUri ? m.mediaUri.split('/').pop() || null : null,
+        rawText: m.rawText || '',
+    }));
+
+    return {
+        version: 1,
+        exportDate: Date.now(),
+        chat: {
+            name: chat.name,
+            sourcePlatform: chat.sourcePlatform,
+            importDate: chat.importDate,
+        },
+        senders,
+        messages: exportedMessages,
+    };
+}
+
+/**
+ * Imports a previously exported chat backup into the database.
+ * Re-creates the chat, senders, and messages. Remaps media filenames to new local paths.
+ *
+ * @param exportData The ChatExport JSON object
+ * @param mediaDir The local directory URI where media files were placed (or null if no media)
+ * @returns The newly created chat ID
+ */
+export async function importRestoredChat(
+    exportData: ChatExport,
+    mediaDir: string | null,
+): Promise<number> {
+    let insertedChatId = 0;
+
+    await db.withTransactionAsync(async () => {
+        // 1. Insert Chat
+        const chatResult = await db.runAsync(
+            `INSERT INTO chats (name, source_platform, import_date) VALUES (?, ?, ?)`,
+            [exportData.chat.name, exportData.chat.sourcePlatform, Date.now()],
+        );
+        insertedChatId = chatResult.lastInsertRowId;
+
+        // 2. Resolve Senders
+        const senderMap = new Map<string, number>();
+        for (const senderName of exportData.senders) {
+            await db.runAsync(`INSERT OR IGNORE INTO senders (name) VALUES (?)`, [senderName]);
+            const row = await db.getFirstAsync<{ id: number }>(
+                `SELECT id FROM senders WHERE name = ?`,
+                [senderName],
+            );
+            if (row) senderMap.set(senderName, row.id);
+        }
+
+        // 3. Batch insert messages
+        const stmt = await db.prepareAsync(`
+            INSERT INTO messages (
+                chat_id, sender_id, timestamp, content, type, is_media_omitted, media_uri, raw_text
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+
+        try {
+            for (const msg of exportData.messages) {
+                const senderId = msg.senderName ? (senderMap.get(msg.senderName) ?? null) : null;
+
+                // Remap media filename to full local URI
+                let mediaUri: string | null = null;
+                if (msg.mediaFilename && mediaDir) {
+                    mediaUri = `${mediaDir}/${msg.mediaFilename}`;
+                }
+
+                await stmt.executeAsync([
+                    insertedChatId,
+                    senderId,
+                    msg.timestamp,
+                    msg.content,
+                    msg.type,
+                    msg.isMediaOmitted ? 1 : 0,
+                    mediaUri,
+                    msg.rawText || '',
+                ]);
+            }
+        } finally {
+            await stmt.finalizeAsync();
+        }
+    });
+
+    return insertedChatId;
+}
+
+/**
+ * Gets the media directory URI for a given chat by inspecting the first message with a media_uri.
+ * Returns null if no media exists.
+ */
+export async function getChatMediaDir(chatId: number): Promise<string | null> {
+    const row = await db.getFirstAsync<{ mediaUri: string }>(
+        `SELECT media_uri as mediaUri FROM messages 
+         WHERE chat_id = ? AND media_uri IS NOT NULL LIMIT 1`,
+        [chatId],
+    );
+    if (!row?.mediaUri) return null;
+
+    // Extract directory from URI: "file:///.../.../media/import_123/file.jpg" → "file:///.../.../media/import_123"
+    const lastSlash = row.mediaUri.lastIndexOf('/');
+    return lastSlash > 0 ? row.mediaUri.substring(0, lastSlash) : null;
+}
